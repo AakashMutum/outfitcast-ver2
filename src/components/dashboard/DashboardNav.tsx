@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { useAuth } from '@/contexts/AuthContext';
 import { Home, Shirt, Settings, LogOut, User } from 'lucide-react';
 
@@ -52,7 +53,7 @@ export function DashboardNav() {
             <div className="hidden sm:flex items-center gap-3">
               <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center">
                 {profile?.avatar_url ? (
-                  <img src={profile.avatar_url} alt={profile.username || 'User'} className="w-full h-full rounded-full object-cover" />
+                  <Image src={profile.avatar_url} alt={profile.username || 'User'} width={32} height={32} className="w-full h-full rounded-full object-cover" />
                 ) : (
                   <User size={16} className="text-white" />
                 )}

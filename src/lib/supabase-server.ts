@@ -13,14 +13,14 @@ export const createServerSupabase = () => {
                 set: (name, value, options) => {
                     try {
                         cookieStore.set({ name, value, ...options })
-                    } catch (error) {
+                    } catch {
                         // Handle server component cookie set limitations
                     }
                 },
                 remove: (name, options) => {
                     try {
                         cookieStore.set({ name, value: '', ...options })
-                    } catch (error) {
+                    } catch {
                         // Handle server component cookie set limitations
                     }
                 },

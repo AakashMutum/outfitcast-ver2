@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Sun, Cloud, CloudRain, CloudSnow, Wind, Droplets, Thermometer, MapPin } from 'lucide-react';
 import { WeatherData } from '@/types';
 
@@ -12,6 +12,36 @@ export function WeatherSection({ location }: WeatherSectionProps) {
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const API_KEY = process.env.NEXT_PUBLIC_WEATHER_API_KEY;
+
+  const transformWeatherData = useCallback((data: { list: { main: { temp: number; feels_like: number; humidity: number; temp_max: number; temp_min: number; }; weather: { main: string; }[]; wind: { speed: number; }; dt: number; }[] }): WeatherData => {
+    const current = data.list[0];
+    const daily = data.list.filter((_, i) => i % 8 === 0).slice(0, 7);
+    return {
+      current: {
+        temp: Math.round(current.main.temp),
+        condition: current.weather[0].main,
+        icon: getWeatherIcon(current.weather[0].main),
+        humidity: current.main.humidity,
+        wind_speed: Math.round(current.wind.speed * 3.6),
+        feels_like: Math.round(current.main.feels_like),
+      },
+      forecast: daily.map((day, i) => ({
+        date: i === 0 ? 'Today' : new Date(day.dt * 1000).toLocaleDateString('en-US', { weekday: 'short' }),
+        temp_high: Math.round(day.main.temp_max),
+        temp_low: Math.round(day.main.temp_min),
+        condition: day.weather[0].main,
+        icon: getWeatherIcon(day.weather[0].main),
+      })),
+    };
+  }, []);
+
+  const getWeatherIcon = (condition: string): string => {
+    const main = condition.toLowerCase();
+    if (main.includes('clear') || main.includes('sun')) return 'sun';
+    if (main.includes('rain')) return 'rain';
+    if (main.includes('snow')) return 'snow';
+    return 'cloud';
+  };
 
   useEffect(() => {
     const fetchWeather = async () => {
@@ -25,14 +55,14 @@ export function WeatherSection({ location }: WeatherSectionProps) {
         if (!response.ok) throw new Error('Failed to fetch weather');
         const data = await response.json();
         setWeather(transformWeatherData(data));
-      } catch (err) {
+      } catch {
         setWeather(getMockWeather());
       } finally {
         setIsLoading(false);
       }
     };
     fetchWeather();
-  }, [location, API_KEY]);
+  }, [location, API_KEY, transformWeatherData]);
 
   const getMockWeather = (): WeatherData => ({
     current: {
@@ -54,35 +84,7 @@ export function WeatherSection({ location }: WeatherSectionProps) {
     ],
   });
 
-  const transformWeatherData = (data: any): WeatherData => {
-    const current = data.list[0];
-    const daily = data.list.filter((_: any, i: number) => i % 8 === 0).slice(0, 7);
-    return {
-      current: {
-        temp: Math.round(current.main.temp),
-        condition: current.weather[0].main,
-        icon: getWeatherIcon(current.weather[0].main),
-        humidity: current.main.humidity,
-        wind_speed: Math.round(current.wind.speed * 3.6),
-        feels_like: Math.round(current.main.feels_like),
-      },
-      forecast: daily.map((day: any, i: number) => ({
-        date: i === 0 ? 'Today' : new Date(day.dt * 1000).toLocaleDateString('en-US', { weekday: 'short' }),
-        temp_high: Math.round(day.main.temp_max),
-        temp_low: Math.round(day.main.temp_min),
-        condition: day.weather[0].main,
-        icon: getWeatherIcon(day.weather[0].main),
-      })),
-    };
-  };
 
-  const getWeatherIcon = (condition: string): string => {
-    const main = condition.toLowerCase();
-    if (main.includes('clear') || main.includes('sun')) return 'sun';
-    if (main.includes('rain')) return 'rain';
-    if (main.includes('snow')) return 'snow';
-    return 'cloud';
-  };
 
   const WeatherIcon = ({ icon, size = 24 }: { icon: string; size?: number }) => {
     switch (icon) {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { DashboardNav } from '@/components/dashboard/DashboardNav';
@@ -15,7 +15,7 @@ export default function WardrobePage() {
   const [wardrobeItems, setWardrobeItems] = useState<WardrobeItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchWardrobe = async () => {
+  const fetchWardrobe = useCallback(async () => {
     if (!user) return;
     try {
       const { data, error } = await supabase.from('wardrobe_items').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
@@ -26,11 +26,11 @@ export default function WardrobePage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user, supabase]);
 
   useEffect(() => {
     if (user) fetchWardrobe();
-  }, [user, supabase]);
+  }, [user, fetchWardrobe]);
 
   if (authLoading || isLoading) {
     return (
@@ -63,10 +63,11 @@ export default function WardrobePage() {
           <div className="mt-6 grid grid-cols-2 sm:grid-cols-5 gap-4">
             {['top', 'bottom', 'shoes', 'outerwear', 'accessories'].map((category) => {
               const count = wardrobeItems.filter(item => item.category === category).length;
+              const label = ['shoes', 'accessories', 'outerwear'].includes(category) ? category : `${category}s`;
               return (
                 <div key={category} className="glass-card p-4 text-center">
                   <div className="font-serif text-2xl text-white">{count}</div>
-                  <div className="text-white/50 text-sm capitalize">{category}s</div>
+                  <div className="text-white/50 text-sm capitalize">{label}</div>
                 </div>
               );
             })}

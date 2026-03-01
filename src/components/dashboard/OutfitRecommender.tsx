@@ -31,7 +31,6 @@ function generateOutfitRecommendation(
   items: WardrobeItem[],
   weather: { temp: number; condition: string; rain?: boolean },
   mood: Mood,
-  occasion: Occasion
 ): OutfitRecommendation & { explanation: string } {
   const suitableItems = items.filter(item => item.season === 'all' || true);
   const isCold = weather.temp < 15;
@@ -65,7 +64,7 @@ function generateOutfitRecommendation(
     return categoryItems.sort((a, b) => scoreItem(b) - scoreItem(a))[0];
   };
 
-  const outfit: OutfitRecommendation = {
+  const outfit: Partial<OutfitRecommendation> = {
     top: getBestItem('top'),
     bottom: getBestItem('bottom'),
     shoes: getBestItem('shoes'),
@@ -80,7 +79,15 @@ function generateOutfitRecommendation(
   if (mood === 'sporty') explanation += '. Comfortable, active wear chosen';
   explanation += '.';
 
-  return { ...outfit, explanation };
+  const result: OutfitRecommendation & { explanation: string } = {
+    top: outfit.top || null,
+    bottom: outfit.bottom || null,
+    shoes: outfit.shoes || null,
+    outerwear: outfit.outerwear || null,
+    accessories: outfit.accessories || [],
+    explanation
+  };
+  return result;
 }
 
 export function OutfitRecommender({ wardrobeItems }: OutfitRecommenderProps) {
@@ -95,7 +102,7 @@ export function OutfitRecommender({ wardrobeItems }: OutfitRecommenderProps) {
     if (wardrobeItems.length === 0) return;
     setIsGenerating(true);
     setTimeout(() => {
-      const result = generateOutfitRecommendation(wardrobeItems, mockWeather, selectedMood, selectedOccasion);
+      const result = generateOutfitRecommendation(wardrobeItems, mockWeather, selectedMood);
       setRecommendation(result);
       setIsGenerating(false);
     }, 1000);
@@ -147,7 +154,7 @@ export function OutfitRecommender({ wardrobeItems }: OutfitRecommenderProps) {
       </div>
 
       <div className="mb-6">
-        <label className="text-white/70 text-sm mb-2 block">What's the occasion?</label>
+        <label className="text-white/70 text-sm mb-2 block">What&apos;s the occasion?</label>
         <select value={selectedOccasion} onChange={(e) => setSelectedOccasion(e.target.value as Occasion)} className="w-full px-4 py-3 rounded-xl glass text-white">
           {occasions.map((o) => (<option key={o.value} value={o.value} className="bg-sky-800">{o.label}</option>))}
         </select>

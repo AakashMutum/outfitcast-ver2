@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import Image from 'next/image';
 import { createBrowserSupabase } from '@/lib/supabase-browser';
 import { User, Camera, Edit2, Check, X } from 'lucide-react';
 import { Profile } from '@/types';
@@ -41,7 +42,7 @@ export function ProfilePanel({ profile }: ProfilePanelProps) {
         <div className="relative">
           <div className="w-24 h-24 rounded-full bg-white/20 flex items-center justify-center overflow-hidden border-2 border-white/30">
             {profile?.avatar_url ? (
-              <img src={profile.avatar_url} alt={profile.username || 'User'} className="w-full h-full object-cover" />
+              <Image src={profile.avatar_url} alt={profile.username || 'User'} width={96} height={96} className="w-full h-full object-cover" />
             ) : (
               <User size={40} className="text-white/70" />
             )}
