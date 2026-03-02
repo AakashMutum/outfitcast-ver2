@@ -1,10 +1,10 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Session, User as SupabaseUser } from '@supabase/supabase-js';
 import { createBrowserSupabase } from '@/lib/supabase-browser';
-import { Profile } from '@/types';
+import { Profile, Preferences, WardrobeItem } from '@/types';
 
 interface AuthContextType {
   user: SupabaseUser | null;
@@ -15,6 +15,8 @@ interface AuthContextType {
   signUp: (email: string, password: string, username: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
+  preferences: Preferences | null;
+  wardrobeItems: WardrobeItem[] | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -22,82 +24,168 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [preferences, setPreferences] = useState<Preferences | null>(null);
+  const [wardrobeItems, setWardrobeItems] = useState<WardrobeItem[] | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
-  const [supabase] = useState(() => createBrowserSupabase());
+  const supabaseRef = useRef(createBrowserSupabase());
+  const supabase = supabaseRef.current;
 
-  const fetchProfile = useCallback(async (userId: string) => {
+  // Fetch user data (profile, preferences, wardrobe) — non-blocking for auth loading
+  const fetchUserData = useCallback(async (userId: string) => {
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
+      // Fire all three in parallel, don't block each other
+      const [profileResult, prefsResult, wardrobeResult] = await Promise.allSettled([
+        supabase.from('profiles').select('*').eq('id', userId).single(),
+        supabase.from('preferences').select('*').eq('user_id', userId).single(),
+        supabase.from('wardrobe_items').select('*').eq('user_id', userId),
+      ]);
 
-      if (error) {
-        console.error('Error fetching profile:', error);
-        return;
+      if (profileResult.status === 'fulfilled' && profileResult.value.data) {
+        setProfile(profileResult.value.data as Profile);
       }
-
-      if (data) {
-        setProfile(data as Profile);
+      if (prefsResult.status === 'fulfilled' && prefsResult.value.data) {
+        setPreferences(prefsResult.value.data as Preferences);
+      }
+      if (wardrobeResult.status === 'fulfilled' && wardrobeResult.value.data) {
+        setWardrobeItems(wardrobeResult.value.data as WardrobeItem[]);
       }
     } catch (error) {
-      console.error('Error fetching profile:', error);
+      console.error('Error fetching user data:', error);
     }
   }, [supabase]);
 
-  const refreshProfile = async () => {
+  const refreshProfile = useCallback(async () => {
     if (user?.id) {
-      await fetchProfile(user.id);
+      await fetchUserData(user.id);
+    }
+  }, [user?.id, fetchUserData]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    // Safety timeout — always stop loading after 8 seconds no matter what
+    const timeout = setTimeout(() => {
+      if (mounted) {
+        setIsLoading(false);
+      }
+    }, 8000);
+
+    const initializeAuth = async () => {
+      try {
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+
+        if (!mounted) return;
+
+        setSession(currentSession);
+        setUser(currentSession?.user ?? null);
+
+        // Resolve loading immediately after session check — don't wait for profile/prefs/wardrobe
+        setIsLoading(false);
+
+        // Fetch user data in background (non-blocking)
+        if (currentSession?.user) {
+          fetchUserData(currentSession.user.id);
+        }
+      } catch (error) {
+        console.error('Error initializing auth:', error);
+        if (mounted) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    initializeAuth();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, newSession) => {
+        if (!mounted) return;
+
+        setSession(newSession);
+        setUser(newSession?.user ?? null);
+
+        if (newSession?.user) {
+          // Fetch in background, don't block
+          fetchUserData(newSession.user.id);
+        } else {
+          setProfile(null);
+          setPreferences(null);
+          setWardrobeItems(null);
+        }
+
+        setIsLoading(false);
+      }
+    );
+
+    return () => {
+      mounted = false;
+      clearTimeout(timeout);
+      subscription.unsubscribe();
+    };
+  }, [supabase, fetchUserData]);
+
+  const signIn = async (email: string, password: string) => {
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      return { error };
+    } catch (error) {
+      return { error: error as Error };
     }
   };
 
-  useEffect(() => {
-    // MOCK AUTHENTICATION FOR DEVELOPMENT
-    const mockUser: SupabaseUser = {
-      id: 'mock-user-1',
-      app_metadata: {},
-      user_metadata: {},
-      aud: 'authenticated',
-      created_at: new Date().toISOString(),
-      email: 'demo@outfitcast.com',
-    } as SupabaseUser;
-
-    const mockProfile: Profile = {
-      id: 'mock-user-1',
-      username: 'Demo User',
-      email: 'demo@outfitcast.com',
-      avatar_url: null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      location: 'New York, NY',
-      style_preference: 'casual'
-    } as Profile;
-
-    setSession({} as Session);
-    setUser(mockUser);
-    setProfile(mockProfile);
-    setIsLoading(false);
-  }, []);
-
-  const signIn = async (email: string, password: string) => {
-    router.push('/dashboard');
-    return { error: null };
-  };
-
   const signUp = async (email: string, password: string, username: string) => {
-    router.push('/dashboard');
-    return { error: null };
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { username },
+        },
+      });
+
+      if (error) return { error };
+
+      if (data.user) {
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert({
+            id: data.user.id,
+            email: data.user.email,
+            username,
+          });
+
+        if (profileError) {
+          console.error('Error creating profile:', profileError);
+          return { error: profileError };
+        }
+      }
+
+      return { error: null };
+    } catch (error) {
+      return { error: error as Error };
+    }
   };
 
   const signOut = async () => {
-    router.push('/login');
+    try {
+      await supabase.auth.signOut();
+      setUser(null);
+      setProfile(null);
+      setPreferences(null);
+      setWardrobeItems(null);
+      setSession(null);
+      router.push('/login');
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
   };
 
   return (
-    <AuthContext.Provider value={{ user, profile, session, isLoading, signIn, signUp, signOut, refreshProfile }}>
+    <AuthContext.Provider value={{ user, profile, session, isLoading, signIn, signUp, signOut, refreshProfile, preferences, wardrobeItems }}>
       {children}
     </AuthContext.Provider>
   );

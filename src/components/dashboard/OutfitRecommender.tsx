@@ -1,12 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import { WardrobeItem, OutfitRecommendation, Mood, Occasion } from '@/types';
-import { Sparkles, Shirt, Footprints, Wind, CircleDot, Sparkle, RefreshCw } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
+import { createBrowserSupabase } from '@/lib/supabase-browser';
+import { WardrobeItem, OutfitRecommendation, Mood, Occasion, Preferences } from '@/types';
+import { Sparkles, Shirt, Footprints, Wind, CircleDot, Sparkle, RefreshCw, Save, Check } from 'lucide-react';
 
 interface OutfitRecommenderProps {
   wardrobeItems: WardrobeItem[];
   location: string;
+  preferences?: Preferences | null;
+  onOutfitSaved?: () => void;
 }
 
 const moods: { value: Mood; label: string; emoji: string }[] = [
@@ -27,85 +31,113 @@ const occasions: { value: Occasion; label: string }[] = [
   { value: 'travel', label: 'Travel' },
 ];
 
-function generateOutfitRecommendation(
-  items: WardrobeItem[],
-  weather: { temp: number; condition: string; rain?: boolean },
-  mood: Mood,
-): OutfitRecommendation & { explanation: string } {
-  const suitableItems = items.filter(item => item.season === 'all' || true);
-  const isCold = weather.temp < 15;
-  const isHot = weather.temp > 25;
-  const isRaining = weather.rain || weather.condition.toLowerCase().includes('rain');
-
-  const moodPreferences: Record<Mood, { categories: string[]; colors: string[] }> = {
-    happy: { categories: ['top', 'bottom', 'shoes'], colors: ['Yellow', 'Pink', 'Orange', 'Red'] },
-    chill: { categories: ['top', 'bottom', 'shoes'], colors: ['Blue', 'Green', 'Gray', 'Beige'] },
-    formal: { categories: ['top', 'bottom', 'shoes'], colors: ['Black', 'Navy', 'Gray', 'White'] },
-    sporty: { categories: ['top', 'bottom', 'shoes'], colors: ['Black', 'Gray', 'Blue', 'Red'] },
-    cozy: { categories: ['top', 'bottom', 'shoes', 'outerwear'], colors: ['Brown', 'Beige', 'Gray', 'White'] },
-    adventurous: { categories: ['top', 'bottom', 'shoes', 'outerwear'], colors: ['Green', 'Brown', 'Orange', 'Blue'] },
-  };
-
-  const preference = moodPreferences[mood];
-
-  const scoreItem = (item: WardrobeItem): number => {
-    let score = 0;
-    if (preference.colors.includes(item.color)) score += 2;
-    if (preference.categories.includes(item.category)) score += 1;
-    if (isCold && item.category === 'outerwear') score += 3;
-    if (isHot && item.category === 'top') score += 1;
-    if (isRaining && item.category === 'shoes' && (item.name?.toLowerCase().includes('boot') || item.color === 'Black')) score += 2;
-    return score;
-  };
-
-  const getBestItem = (category: WardrobeItem['category']): WardrobeItem | null => {
-    const categoryItems = suitableItems.filter(item => item.category === category);
-    if (categoryItems.length === 0) return null;
-    return categoryItems.sort((a, b) => scoreItem(b) - scoreItem(a))[0];
-  };
-
-  const outfit: Partial<OutfitRecommendation> = {
-    top: getBestItem('top'),
-    bottom: getBestItem('bottom'),
-    shoes: getBestItem('shoes'),
-    outerwear: isCold ? getBestItem('outerwear') : null,
-    accessories: suitableItems.filter(item => item.category === 'accessories').slice(0, 2),
-  };
-
-  let explanation = `Based on ${weather.temp}°C weather and your ${mood} mood`;
-  if (isCold) explanation += ', we recommend layering with outerwear';
-  if (isRaining) explanation += '. Waterproof options prioritized';
-  if (mood === 'formal') explanation += '. Professional attire selected';
-  if (mood === 'sporty') explanation += '. Comfortable, active wear chosen';
-  explanation += '.';
-
-  const result: OutfitRecommendation & { explanation: string } = {
-    top: outfit.top || null,
-    bottom: outfit.bottom || null,
-    shoes: outfit.shoes || null,
-    outerwear: outfit.outerwear || null,
-    accessories: outfit.accessories || [],
-    explanation
-  };
-  return result;
+async function fetchCurrentWeather(location: string) {
+  const API_KEY = process.env.NEXT_PUBLIC_WEATHER_API_KEY;
+  if (!API_KEY) {
+    return { temp: 25, condition: 'Clear', humidity: 50, wind_speed: 10, feels_like: 25 };
+  }
+  try {
+    const response = await fetch(
+      `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(location)}&appid=${API_KEY}&units=metric`
+    );
+    if (!response.ok) throw new Error('Weather fetch failed');
+    const data = await response.json();
+    return {
+      temp: Math.round(data.main.temp),
+      condition: data.weather[0].main,
+      humidity: data.main.humidity,
+      wind_speed: Math.round(data.wind.speed * 3.6),
+      feels_like: Math.round(data.main.feels_like),
+    };
+  } catch {
+    return { temp: 25, condition: 'Clear', humidity: 50, wind_speed: 10, feels_like: 25 };
+  }
 }
 
-export function OutfitRecommender({ wardrobeItems }: OutfitRecommenderProps) {
+export function OutfitRecommender({ wardrobeItems, location, preferences, onOutfitSaved }: OutfitRecommenderProps) {
   const [selectedMood, setSelectedMood] = useState<Mood>('happy');
   const [selectedOccasion, setSelectedOccasion] = useState<Occasion>('casual');
   const [recommendation, setRecommendation] = useState<(OutfitRecommendation & { explanation: string }) | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastWeather, setLastWeather] = useState<{ temp: number; condition: string } | null>(null);
+  const { user } = useAuth();
+  const [supabase] = useState(() => createBrowserSupabase());
 
-  const mockWeather = { temp: 22, condition: 'Partly Cloudy', rain: false };
-
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (wardrobeItems.length === 0) return;
     setIsGenerating(true);
-    setTimeout(() => {
-      const result = generateOutfitRecommendation(wardrobeItems, mockWeather, selectedMood);
+    setError(null);
+    setIsSaved(false);
+
+    try {
+      const weather = await fetchCurrentWeather(location);
+      setLastWeather({ temp: weather.temp, condition: weather.condition });
+
+      const response = await fetch('/api/recommend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wardrobeItems: wardrobeItems.map(item => ({
+            id: item.id,
+            category: item.category,
+            color: item.color,
+            season: item.season,
+            name: item.name,
+          })),
+          weather,
+          preferences: {
+            gender: preferences?.gender || null,
+            style: preferences?.style || null,
+            location: preferences?.location || location,
+          },
+          mood: selectedMood,
+          occasion: selectedOccasion,
+        }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to generate recommendation');
+      }
+
+      const result = await response.json();
       setRecommendation(result);
+
+      // Auto-save the outfit to the outfits table
+      if (user) {
+        try {
+          const { error: saveError } = await supabase.from('outfits').insert({
+            user_id: user.id,
+            top_id: result.top?.id || null,
+            bottom_id: result.bottom?.id || null,
+            shoes_id: result.shoes?.id || null,
+            outerwear_id: result.outerwear?.id || null,
+            accessory_ids: result.accessories?.map((a: WardrobeItem) => a.id) || [],
+            explanation: result.explanation,
+            mood: selectedMood,
+            occasion: selectedOccasion,
+            weather_temp: weather.temp,
+            weather_condition: weather.condition,
+          });
+
+          if (!saveError) {
+            setIsSaved(true);
+            onOutfitSaved?.();
+          } else {
+            console.error('Error saving outfit:', saveError);
+          }
+        } catch (saveErr) {
+          console.error('Error saving outfit:', saveErr);
+        }
+      }
+    } catch (err) {
+      console.error('Recommendation error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to generate recommendation');
+    } finally {
       setIsGenerating(false);
-    }, 1000);
+    }
   };
 
   const getCategoryIcon = (category: string) => {
@@ -166,9 +198,22 @@ export function OutfitRecommender({ wardrobeItems }: OutfitRecommenderProps) {
 
       {wardrobeItems.length === 0 && <p className="text-white/50 text-sm text-center mt-3">Add items to your wardrobe first</p>}
 
+      {error && (
+        <div className="mt-3 p-3 rounded-lg bg-red-500/20 border border-red-500/30 text-red-200 text-sm text-center">
+          {error}
+        </div>
+      )}
+
       {recommendation && (
         <div className="mt-6 p-4 rounded-xl bg-white/10 border border-white/20">
-          <h3 className="font-serif text-lg text-white mb-4">Your Perfect Outfit</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-serif text-lg text-white">Your Perfect Outfit</h3>
+            {isSaved && (
+              <span className="flex items-center gap-1 text-green-300 text-xs">
+                <Check size={14} /> Saved
+              </span>
+            )}
+          </div>
           <div className="space-y-3">
             {recommendation.top && (
               <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
@@ -241,6 +286,11 @@ export function OutfitRecommender({ wardrobeItems }: OutfitRecommenderProps) {
               <p className="text-purple-200 text-sm">{recommendation.explanation}</p>
             </div>
           </div>
+          {lastWeather && (
+            <p className="text-white/40 text-xs mt-3 text-center">
+              Generated for {lastWeather.temp}°C, {lastWeather.condition} • {selectedMood} mood • {selectedOccasion}
+            </p>
+          )}
         </div>
       )}
     </div>

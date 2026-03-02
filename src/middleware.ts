@@ -68,13 +68,13 @@ export async function middleware(req: NextRequest) {
     req.nextUrl.pathname.startsWith('/preferences') ||
     req.nextUrl.pathname.startsWith('/wardrobe');
 
-  // if (!session && isProtected) {
-  //   return NextResponse.redirect(new URL('/login', req.url));
-  // }
+  if (!session && isProtected) {
+    return NextResponse.redirect(new URL('/login', req.url));
+  }
 
-  // if (session && isAuthPage) {
-  //   return NextResponse.redirect(new URL('/dashboard', req.url));
-  // }
+  if (session && isAuthPage) {
+    return NextResponse.redirect(new URL('/dashboard', req.url));
+  }
 
   return res;
 }

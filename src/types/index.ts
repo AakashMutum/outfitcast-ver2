@@ -61,5 +61,22 @@ export interface OutfitRecommendation {
   explanation: string;
 }
 
+export interface SavedOutfit {
+  id: string;
+  user_id: string;
+  top_id: string | null;
+  bottom_id: string | null;
+  shoes_id: string | null;
+  outerwear_id: string | null;
+  accessory_ids: string[];
+  explanation: string;
+  mood: string;
+  occasion: string;
+  weather_temp: number;
+  weather_condition: string;
+  created_at: string;
+}
+
 export type Mood = 'happy' | 'chill' | 'formal' | 'sporty' | 'cozy' | 'adventurous';
 export type Occasion = 'work' | 'casual' | 'date' | 'workout' | 'party' | 'travel';
+
