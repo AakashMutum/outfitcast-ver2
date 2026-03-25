@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { DashboardNav } from '@/components/dashboard/DashboardNav';
 import { createBrowserSupabase } from '@/lib/supabase-browser';
-import { MapPin, User, Palette, Save, Check } from 'lucide-react';
+import { MapPin, User, Palette, Save, Check, Navigation } from 'lucide-react';
 import { Preferences } from '@/types';
 
 const styles = ['Casual', 'Professional', 'Sporty', 'Bohemian', 'Minimalist', 'Preppy', 'Streetwear'];
@@ -22,6 +22,7 @@ export default function PreferencesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isDetecting, setIsDetecting] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -43,6 +44,32 @@ export default function PreferencesPage() {
     };
     fetchPreferences();
   }, [user, supabase]);
+
+  // Detect location via browser geolocation + OWM reverse geocode
+  const handleDetectLocation = useCallback(async () => {
+    if (!navigator.geolocation) return;
+    setIsDetecting(true);
+    try {
+      const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
+        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 8000 })
+      );
+      const API_KEY = process.env.NEXT_PUBLIC_WEATHER_API_KEY;
+      if (!API_KEY) return;
+      const res = await fetch(
+        `https://api.openweathermap.org/geo/1.0/reverse?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&limit=1&appid=${API_KEY}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setLocation(data[0].name || '');
+        }
+      }
+    } catch {
+      // User denied or timeout – do nothing
+    } finally {
+      setIsDetecting(false);
+    }
+  }, []);
 
   const handleSave = async () => {
     if (!user) return;
@@ -93,7 +120,23 @@ export default function PreferencesPage() {
               <label className="flex items-center gap-2 text-white/80 text-sm mb-3">
                 <MapPin size={18} /> Your Location
               </label>
-              <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g., New York, NY" className="w-full px-4 py-3 rounded-xl glass text-white placeholder-white/50" />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  placeholder="e.g., Chennai, India"
+                  className="flex-1 px-4 py-3 rounded-xl glass text-white placeholder-white/50"
+                />
+                <button
+                  onClick={handleDetectLocation}
+                  disabled={isDetecting}
+                  title="Detect my location"
+                  className="px-4 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors disabled:opacity-50 flex items-center gap-2"
+                >
+                  {isDetecting ? <div className="spinner" /> : <Navigation size={16} />}
+                </button>
+              </div>
               <p className="text-white/50 text-xs mt-2">Used for weather forecasts and local recommendations</p>
             </div>
 

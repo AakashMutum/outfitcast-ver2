@@ -44,6 +44,7 @@ export function WeatherSection({ location }: WeatherSectionProps) {
   };
 
   useEffect(() => {
+    if (!location) return; // Wait until a location is available
     const fetchWeather = async () => {
       if (!API_KEY) {
         setWeather(getMockWeather());
@@ -94,6 +95,19 @@ export function WeatherSection({ location }: WeatherSectionProps) {
       default: return <Cloud size={size} className="text-white" />;
     }
   };
+
+  if (!location) {
+    return (
+      <div className="glass-card p-6">
+        <div className="flex items-center justify-center h-48">
+          <div className="text-center">
+            <div className="spinner mx-auto mb-3" />
+            <p className="text-white/60 text-sm">Detecting your location…</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
