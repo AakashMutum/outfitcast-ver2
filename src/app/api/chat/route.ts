@@ -1,7 +1,15 @@
+interface ChatBody {
+  message?: string;
+  wardrobe?: WardrobeItem[];
+  weather?: Record<string, unknown>;
+  preferences?: Record<string, unknown>;
+}
+
 import { generateFallbackOutfit } from "@/lib/fallbackOutfit";
+import { WardrobeItem } from "@/types";
 
 export async function POST(req: Request) {
-  let body: any = {};
+  let body: ChatBody = {};
 
   try {
     try {
