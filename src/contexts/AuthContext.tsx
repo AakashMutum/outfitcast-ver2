@@ -37,16 +37,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       // Fire all three in parallel, don't block each other
       const [profileResult, prefsResult, wardrobeResult] = await Promise.allSettled([
-        supabase.from('profiles').select('*').eq('id', userId).single(),
-        supabase.from('preferences').select('*').eq('user_id', userId).single(),
+        supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
+        supabase.from('preferences').select('*').eq('user_id', userId).maybeSingle(),
         supabase.from('wardrobe_items').select('*').eq('user_id', userId),
       ]);
 
       if (profileResult.status === 'fulfilled' && profileResult.value.data) {
         setProfile(profileResult.value.data as Profile);
       }
-      if (prefsResult.status === 'fulfilled' && prefsResult.value.data) {
-        setPreferences(prefsResult.value.data as Preferences);
+      if (prefsResult.status === 'fulfilled') {
+        if (prefsResult.value.data) {
+          setPreferences(prefsResult.value.data as Preferences);
+        } else if (!prefsResult.value.error) {
+          // No preferences row exists, create a default one
+          const { data: newPrefs } = await supabase
+            .from('preferences')
+            .insert({ user_id: userId })
+            .select()
+            .maybeSingle();
+          if (newPrefs) setPreferences(newPrefs as Preferences);
+        }
       }
       if (wardrobeResult.status === 'fulfilled' && wardrobeResult.value.data) {
         setWardrobeItems(wardrobeResult.value.data as WardrobeItem[]);
@@ -139,7 +149,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signUp = async (email: string, password: string, username: string) => {
     try {
-      const { data, error } = await supabase.auth.signUp({
+      const { error } = await supabase.auth.signUp({
         email,
         password,
         options: {
@@ -148,22 +158,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (error) return { error };
-
-      if (data.user) {
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .insert({
-            id: data.user.id,
-            email: data.user.email,
-            username,
-          });
-
-        if (profileError) {
-          console.error('Error creating profile:', profileError);
-          return { error: profileError };
-        }
-      }
-
       return { error: null };
     } catch (error) {
       return { error: error as Error };

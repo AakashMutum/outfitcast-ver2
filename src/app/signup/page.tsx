@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
-import { Cloud, Sun, Eye, EyeOff } from 'lucide-react';
+import { Cloud, Sun, Eye, EyeOff, Mail, ArrowRight } from 'lucide-react';
 
 export default function SignupPage() {
   const [email, setEmail] = useState('');
@@ -13,6 +13,7 @@ export default function SignupPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [accountCreated, setAccountCreated] = useState(false);
   const router = useRouter();
   const { signUp } = useAuth();
 
@@ -33,14 +34,42 @@ export default function SignupPage() {
         setError(signUpError.message || 'Failed to create account');
         return;
       }
-      router.push('/dashboard');
-      router.refresh();
+      // Show the success screen first, then redirect
+      setAccountCreated(true);
+      setTimeout(() => {
+        router.push('/dashboard');
+      }, 2500);
     } catch {
       setError('An unexpected error occurred');
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Success screen — shown briefly before redirecting to dashboard
+  if (accountCreated) {
+    return (
+      <div className="min-h-screen sky-gradient flex items-center justify-center px-4">
+        <div className="glass-card w-full max-w-md p-8 text-center">
+          <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-6">
+            <Mail size={32} className="text-white" />
+          </div>
+          <h2 className="font-serif text-2xl text-white mb-3">Account Created!</h2>
+          <p className="text-white/70 mb-2">
+            A verification link has been sent to
+          </p>
+          <p className="text-white font-semibold mb-6 break-all">{email}</p>
+          <p className="text-white/60 text-sm mb-6">
+            You can verify your email anytime. Taking you to your dashboard now…
+          </p>
+          <div className="flex items-center justify-center gap-2 text-white/70 text-sm">
+            <div className="spinner" />
+            <span>Redirecting…</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen sky-gradient flex items-center justify-center px-4 py-12 relative overflow-hidden">
@@ -122,7 +151,7 @@ export default function SignupPage() {
             disabled={isLoading}
             className="w-full py-3 px-6 bg-white text-sky-700 rounded-xl font-semibold hover:bg-white/90 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            {isLoading ? <div className="spinner" /> : 'Create Account'}
+            {isLoading ? <div className="spinner" /> : <><ArrowRight size={18} /> Create Account</>}
           </button>
         </form>
 

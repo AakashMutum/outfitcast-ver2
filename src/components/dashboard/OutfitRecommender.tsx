@@ -1,14 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
-import { createBrowserSupabase } from '@/lib/supabase-browser';
-import { WardrobeItem, OutfitRecommendation, Mood, Occasion, Preferences } from '@/types';
-import { Sparkles, Shirt, Footprints, Wind, CircleDot, Sparkle, RefreshCw, Save, Check } from 'lucide-react';
+import { WardrobeItem, Mood, Occasion, Preferences } from '@/types';
+import { LocationCoords } from '@/app/dashboard/page';
+import {
+  Sparkles, Shirt, Footprints, Wind, CircleDot, Sparkle,
+  RefreshCw, CheckCircle2, XCircle, Umbrella, Thermometer,
+} from 'lucide-react';
 
 interface OutfitRecommenderProps {
   wardrobeItems: WardrobeItem[];
-  location: string;
+  coords: LocationCoords | null;
   preferences?: Preferences | null;
   onOutfitSaved?: () => void;
 }
@@ -31,20 +33,23 @@ const occasions: { value: Occasion; label: string }[] = [
   { value: 'travel', label: 'Travel' },
 ];
 
-async function fetchCurrentWeather(location: string) {
+// ─── Weather helpers ──────────────────────────────────────────────────────────
+
+async function fetchCurrentWeather(coords: LocationCoords | null) {
   const API_KEY = process.env.NEXT_PUBLIC_WEATHER_API_KEY;
-  if (!API_KEY) {
+  if (!API_KEY || !coords) {
     return { temp: 25, condition: 'Clear', humidity: 50, wind_speed: 10, feels_like: 25 };
   }
   try {
-    const response = await fetch(
-      `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(location)}&appid=${API_KEY}&units=metric`
+    const { lat, lon } = coords;
+    const res = await fetch(
+      `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric`
     );
-    if (!response.ok) throw new Error('Weather fetch failed');
-    const data = await response.json();
+    if (!res.ok) throw new Error('failed');
+    const data = await res.json();
     return {
       temp: Math.round(data.main.temp),
-      condition: data.weather[0].main,
+      condition: data.weather[0].main as string,
       humidity: data.main.humidity,
       wind_speed: Math.round(data.wind.speed * 3.6),
       feels_like: Math.round(data.main.feels_like),
@@ -54,130 +59,199 @@ async function fetchCurrentWeather(location: string) {
   }
 }
 
-export function OutfitRecommender({ wardrobeItems, location, preferences, onOutfitSaved }: OutfitRecommenderProps) {
+// ─── Outfit suggestion types ──────────────────────────────────────────────────
+
+interface SuggestedSlot {
+  label: string;         // e.g. "Top"
+  icon: React.ReactNode;
+  found: WardrobeItem | null;   // null = not in wardrobe
+  reason?: string;       // e.g. "jacket recommended – cold weather"
+  special?: string;      // e.g. "🌂 Bring an umbrella"
+}
+
+// ─── Core rule engine ─────────────────────────────────────────────────────────
+
+function generateSuggestion(
+  weather: { temp: number; condition: string },
+  wardrobeItems: WardrobeItem[],
+  mood: Mood,
+  occasion: Occasion
+): { slots: SuggestedSlot[]; summary: string } {
+  const byCategory = (cat: WardrobeItem['category']) =>
+    wardrobeItems.filter((i) => i.category === cat);
+
+  const isCold = weather.temp < 15;
+  const isMild = weather.temp >= 15 && weather.temp < 24;
+  const isHot = weather.temp >= 24;
+  const isRaining = /rain|drizzle|thunderstorm/i.test(weather.condition);
+  const isSnowing = /snow|sleet/i.test(weather.condition);
+  const isWorkout = occasion === 'workout' || mood === 'sporty';
+  const isFormal = occasion === 'work' || occasion === 'date' || mood === 'formal';
+
+  // Rank items within a category (higher score = better match)
+  const rank = (items: WardrobeItem[]): WardrobeItem | null => {
+    if (!items.length) return null;
+    const scored = items.map((item) => {
+      let score = 0;
+      const nameLower = (item.name || '').toLowerCase();
+
+      // Season match
+      if (isCold && (item.season === 'winter' || item.season === 'fall')) score += 3;
+      if (isHot && (item.season === 'summer' || item.season === 'spring')) score += 3;
+      if (item.season === 'all') score += 1;
+
+      // Occasion/mood hints from name
+      if (isWorkout && /sport|gym|athletic|jogger|track|running/i.test(nameLower)) score += 4;
+      if (isFormal && /shirt|blazer|trouser|formal|dress|suit|oxford|heel/i.test(nameLower)) score += 4;
+      if (isCold && /thermal|sweater|hoodie|fleece|knit|wool/i.test(nameLower)) score += 3;
+      if (isRaining && /boot|waterproof/i.test(nameLower)) score += 2;
+
+      return { item, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0].item;
+  };
+
+  // Outerwear logic – only suggest if cold/rainy/snowy
+  const outerItems = byCategory('outerwear');
+  let outerFound: WardrobeItem | null = null;
+  let outerReason = '';
+  if (isCold || isRaining || isSnowing) {
+    if (isCold || isSnowing) {
+      // Prefer jacket/coat
+      outerFound = outerItems.find((i) =>
+        /jacket|coat|puffer|parka|overcoat/i.test(i.name || '')
+      ) || rank(outerItems);
+      outerReason = isSnowing ? 'It\'s snowing – a warm coat is essential' : 'Cold weather – layer up with a jacket';
+    } else if (isRaining) {
+      outerFound = outerItems.find((i) => /rain|trench|waterproof/i.test(i.name || '')) || rank(outerItems);
+      outerReason = 'It\'s raining – grab a waterproof layer';
+    }
+  }
+
+  // Shoes logic
+  const shoeItems = byCategory('shoes');
+  let shoesFound: WardrobeItem | null = null;
+  if (isRaining || isSnowing) {
+    shoesFound = shoeItems.find((i) => /boot|rain|waterproof/i.test(i.name || '')) || rank(shoeItems);
+  } else if (isWorkout) {
+    shoesFound = shoeItems.find((i) => /sneaker|trainer|running|sport/i.test(i.name || '')) || rank(shoeItems);
+  } else if (isFormal) {
+    shoesFound = shoeItems.find((i) => /oxford|heel|loafer|formal|dress/i.test(i.name || '')) || rank(shoeItems);
+  } else {
+    shoesFound = rank(shoeItems);
+  }
+
+  // Build weather summary line
+  const tempLabel = isCold ? 'Cold' : isMild ? 'Mild' : 'Hot';
+  const rainNote = isRaining ? ', rainy' : isSnowing ? ', snowy' : '';
+  const summary = `${tempLabel} ${weather.temp}°C${rainNote} · ${mood} mood · ${occasion}`;
+
+  const slots: SuggestedSlot[] = [
+    {
+      label: 'Top',
+      icon: <Shirt size={20} />,
+      found: rank(byCategory('top')),
+      reason: isCold ? 'Warm top for cold weather' : isHot ? 'Light top for the heat' : 'Everyday top',
+    },
+    {
+      label: 'Bottom',
+      icon: <CircleDot size={20} />,
+      found: rank(byCategory('bottom')),
+      reason: isFormal ? 'Smart bottoms for the occasion' : isWorkout ? 'Comfortable bottoms for activity' : 'Casual bottoms',
+    },
+    {
+      label: 'Shoes',
+      icon: <Footprints size={20} />,
+      found: shoesFound,
+      reason: isRaining || isSnowing ? 'Waterproof footwear for wet weather' : isFormal ? 'Formal footwear' : 'Comfortable shoes',
+    },
+    {
+      label: 'Outerwear',
+      icon: <Wind size={20} />,
+      found: outerFound,
+      reason: outerReason || (isCold ? 'Layer up for the cold' : ''),
+    },
+    {
+      label: 'Accessories',
+      icon: <Sparkle size={20} />,
+      found: rank(byCategory('accessories')),
+      reason: 'Complete your look',
+      special: isRaining ? '🌂 Carry an umbrella' : isSnowing ? '🧣 Scarf & gloves recommended' : undefined,
+    },
+  ];
+
+  return { slots, summary };
+}
+
+// ─── Color swatch helper ──────────────────────────────────────────────────────
+
+function colorClass(color: string) {
+  const map: Record<string, string> = {
+    Black: 'bg-gray-900', White: 'bg-white border border-white/30', Gray: 'bg-gray-500',
+    Navy: 'bg-blue-900', Blue: 'bg-blue-500', Red: 'bg-red-500', Green: 'bg-green-500',
+    Yellow: 'bg-yellow-400', Pink: 'bg-pink-400', Purple: 'bg-purple-500',
+    Orange: 'bg-orange-500', Brown: 'bg-amber-700', Beige: 'bg-amber-200',
+    Silver: 'bg-gray-300', Gold: 'bg-yellow-500',
+  };
+  return map[color] || 'bg-gray-400';
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
+export function OutfitRecommender({ wardrobeItems, coords, preferences, onOutfitSaved }: OutfitRecommenderProps) {
   const [selectedMood, setSelectedMood] = useState<Mood>('happy');
   const [selectedOccasion, setSelectedOccasion] = useState<Occasion>('casual');
-  const [recommendation, setRecommendation] = useState<(OutfitRecommendation & { explanation: string }) | null>(null);
+  const [slots, setSlots] = useState<SuggestedSlot[] | null>(null);
+  const [summary, setSummary] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isSaved, setIsSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastWeather, setLastWeather] = useState<{ temp: number; condition: string } | null>(null);
-  const { user } = useAuth();
-  const [supabase] = useState(() => createBrowserSupabase());
+
+  // Suppress unused warning – kept for future use
+  void preferences;
+  void onOutfitSaved;
 
   const handleGenerate = async () => {
-    if (wardrobeItems.length === 0) return;
     setIsGenerating(true);
     setError(null);
-    setIsSaved(false);
-
+    setSlots(null);
     try {
-      const weather = await fetchCurrentWeather(location);
-      setLastWeather({ temp: weather.temp, condition: weather.condition });
-
-      const response = await fetch('/api/recommend', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          wardrobeItems: wardrobeItems.map(item => ({
-            id: item.id,
-            category: item.category,
-            color: item.color,
-            season: item.season,
-            name: item.name,
-          })),
-          weather,
-          preferences: {
-            gender: preferences?.gender || null,
-            style: preferences?.style || null,
-            location: preferences?.location || location,
-          },
-          mood: selectedMood,
-          occasion: selectedOccasion,
-        }),
-      });
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to generate recommendation');
-      }
-
-      const result = await response.json();
-      setRecommendation(result);
-
-      // Auto-save the outfit to the outfits table
-      if (user) {
-        try {
-          const { error: saveError } = await supabase.from('outfits').insert({
-            user_id: user.id,
-            top_id: result.top?.id || null,
-            bottom_id: result.bottom?.id || null,
-            shoes_id: result.shoes?.id || null,
-            outerwear_id: result.outerwear?.id || null,
-            accessory_ids: result.accessories?.map((a: WardrobeItem) => a.id) || [],
-            explanation: result.explanation,
-            mood: selectedMood,
-            occasion: selectedOccasion,
-            weather_temp: weather.temp,
-            weather_condition: weather.condition,
-          });
-
-          if (!saveError) {
-            setIsSaved(true);
-            onOutfitSaved?.();
-          } else {
-            console.error('Error saving outfit:', saveError);
-          }
-        } catch (saveErr) {
-          console.error('Error saving outfit:', saveErr);
-        }
-      }
-    } catch (err) {
-      console.error('Recommendation error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to generate recommendation');
+      const weather = await fetchCurrentWeather(coords);
+      const result = generateSuggestion(weather, wardrobeItems, selectedMood, selectedOccasion);
+      setSlots(result.slots);
+      setSummary(result.summary);
+    } catch {
+      setError('Could not generate outfit. Try again.');
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const getCategoryIcon = (category: string) => {
-    switch (category) {
-      case 'top': return <Shirt size={20} />;
-      case 'bottom': return <CircleDot size={20} />;
-      case 'shoes': return <Footprints size={20} />;
-      case 'outerwear': return <Wind size={20} />;
-      case 'accessories': return <Sparkle size={20} />;
-      default: return <Shirt size={20} />;
-    }
-  };
-
-  const getColorClass = (color: string) => {
-    const colorMap: Record<string, string> = {
-      'Black': 'bg-gray-900', 'White': 'bg-white', 'Gray': 'bg-gray-500', 'Navy': 'bg-blue-900',
-      'Blue': 'bg-blue-500', 'Red': 'bg-red-500', 'Green': 'bg-green-500', 'Yellow': 'bg-yellow-400',
-      'Pink': 'bg-pink-400', 'Purple': 'bg-purple-500', 'Orange': 'bg-orange-500', 'Brown': 'bg-amber-700',
-      'Beige': 'bg-amber-200', 'Silver': 'bg-gray-300', 'Gold': 'bg-yellow-500',
-    };
-    return colorMap[color] || 'bg-gray-400';
-  };
-
   return (
     <div className="glass-card p-6">
+      {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-400 to-pink-400 flex items-center justify-center">
           <Sparkles size={20} className="text-white" />
         </div>
         <div>
-          <h2 className="font-serif text-xl text-white">AI Outfit Recommender</h2>
-          <p className="text-white/60 text-sm">Powered by smart style AI</p>
+          <h2 className="font-serif text-xl text-white">Outfit Recommender</h2>
+          <p className="text-white/60 text-sm">Smart suggestions based on your wardrobe & weather</p>
         </div>
       </div>
 
+      {/* Mood selector */}
       <div className="mb-4">
         <label className="text-white/70 text-sm mb-2 block">How are you feeling today?</label>
         <div className="flex flex-wrap gap-2">
           {moods.map((m) => (
-            <button key={m.value} onClick={() => setSelectedMood(m.value)} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition-colors ${selectedMood === m.value ? 'bg-white/30 text-white' : 'bg-white/5 text-white/70 hover:bg-white/10'}`}>
+            <button
+              key={m.value}
+              onClick={() => setSelectedMood(m.value)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition-colors ${
+                selectedMood === m.value ? 'bg-white/30 text-white' : 'bg-white/5 text-white/70 hover:bg-white/10'
+              }`}
+            >
               <span>{m.emoji}</span>
               <span className="text-sm">{m.label}</span>
             </button>
@@ -185,18 +259,34 @@ export function OutfitRecommender({ wardrobeItems, location, preferences, onOutf
         </div>
       </div>
 
+      {/* Occasion selector */}
       <div className="mb-6">
         <label className="text-white/70 text-sm mb-2 block">What&apos;s the occasion?</label>
-        <select value={selectedOccasion} onChange={(e) => setSelectedOccasion(e.target.value as Occasion)} className="w-full px-4 py-3 rounded-xl glass text-white">
-          {occasions.map((o) => (<option key={o.value} value={o.value} className="bg-sky-800">{o.label}</option>))}
+        <select
+          value={selectedOccasion}
+          onChange={(e) => setSelectedOccasion(e.target.value as Occasion)}
+          className="w-full px-4 py-3 rounded-xl glass text-white"
+        >
+          {occasions.map((o) => (
+            <option key={o.value} value={o.value} className="bg-sky-800">{o.label}</option>
+          ))}
         </select>
       </div>
 
-      <button onClick={handleGenerate} disabled={isGenerating || wardrobeItems.length === 0} className="w-full py-3 px-6 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-semibold hover:opacity-90 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
-        {isGenerating ? <><RefreshCw size={20} className="animate-spin" /> Generating...</> : <><Sparkles size={20} /> Generate Outfit</>}
+      {/* Generate button */}
+      <button
+        onClick={handleGenerate}
+        disabled={isGenerating || wardrobeItems.length === 0}
+        className="w-full py-3 px-6 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-semibold hover:opacity-90 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+      >
+        {isGenerating
+          ? <><RefreshCw size={20} className="animate-spin" /> Generating…</>
+          : <><Sparkles size={20} /> Generate Outfit</>}
       </button>
 
-      {wardrobeItems.length === 0 && <p className="text-white/50 text-sm text-center mt-3">Add items to your wardrobe first</p>}
+      {wardrobeItems.length === 0 && (
+        <p className="text-white/50 text-sm text-center mt-3">Add items to your wardrobe first</p>
+      )}
 
       {error && (
         <div className="mt-3 p-3 rounded-lg bg-red-500/20 border border-red-500/30 text-red-200 text-sm text-center">
@@ -204,93 +294,77 @@ export function OutfitRecommender({ wardrobeItems, location, preferences, onOutf
         </div>
       )}
 
-      {recommendation && (
-        <div className="mt-6 p-4 rounded-xl bg-white/10 border border-white/20">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-serif text-lg text-white">Your Perfect Outfit</h3>
-            {isSaved && (
-              <span className="flex items-center gap-1 text-green-300 text-xs">
-                <Check size={14} /> Saved
-              </span>
-            )}
+      {/* Results */}
+      {slots && (
+        <div className="mt-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-serif text-lg text-white">Today&apos;s Outfit</h3>
+            <span className="flex items-center gap-1 text-white/50 text-xs">
+              <Thermometer size={12} /> {summary.split('·')[0].trim()}
+            </span>
           </div>
-          <div className="space-y-3">
-            {recommendation.top && (
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
-                <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center text-white/70">{getCategoryIcon('top')}</div>
-                <div className="flex-1">
-                  <div className="text-white/60 text-xs">Top</div>
-                  <div className="text-white flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${getColorClass(recommendation.top.color)}`} />
-                    {recommendation.top.name || recommendation.top.color}
+
+          <div className="space-y-2">
+            {slots.map((slot) => {
+              const available = slot.found !== null;
+              // Only show outerwear row if it was actually recommended (has a reason)
+              if (slot.label === 'Outerwear' && !slot.reason) return null;
+
+              return (
+                <div
+                  key={slot.label}
+                  className={`flex items-center gap-3 p-3 rounded-xl border transition-colors ${
+                    available
+                      ? 'bg-green-500/10 border-green-500/25'
+                      : 'bg-white/5 border-white/10'
+                  }`}
+                >
+                  {/* Category icon */}
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                    available ? 'bg-green-500/20 text-green-300' : 'bg-white/10 text-white/40'
+                  }`}>
+                    {slot.icon}
+                  </div>
+
+                  {/* Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-white/50 text-xs mb-0.5">{slot.label}</div>
+                    {available && slot.found ? (
+                      <div className="flex items-center gap-2">
+                        <div className={`w-3 h-3 rounded-full flex-shrink-0 ${colorClass(slot.found.color)}`} />
+                        <span className="text-white text-sm font-medium truncate">
+                          {slot.found.name || slot.found.color}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-white/40 text-sm italic">Not in your wardrobe</span>
+                    )}
+                    {slot.reason && (
+                      <p className="text-white/40 text-xs mt-0.5 truncate">{slot.reason}</p>
+                    )}
+                  </div>
+
+                  {/* Status indicator */}
+                  <div className="flex-shrink-0">
+                    {available
+                      ? <CheckCircle2 size={18} className="text-green-400" />
+                      : <XCircle size={18} className="text-white/25" />}
                   </div>
                 </div>
-              </div>
-            )}
-            {recommendation.bottom && (
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
-                <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center text-white/70">{getCategoryIcon('bottom')}</div>
-                <div className="flex-1">
-                  <div className="text-white/60 text-xs">Bottom</div>
-                  <div className="text-white flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${getColorClass(recommendation.bottom.color)}`} />
-                    {recommendation.bottom.name || recommendation.bottom.color}
-                  </div>
-                </div>
-              </div>
-            )}
-            {recommendation.shoes && (
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
-                <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center text-white/70">{getCategoryIcon('shoes')}</div>
-                <div className="flex-1">
-                  <div className="text-white/60 text-xs">Shoes</div>
-                  <div className="text-white flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${getColorClass(recommendation.shoes.color)}`} />
-                    {recommendation.shoes.name || recommendation.shoes.color}
-                  </div>
-                </div>
-              </div>
-            )}
-            {recommendation.outerwear && (
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
-                <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center text-white/70">{getCategoryIcon('outerwear')}</div>
-                <div className="flex-1">
-                  <div className="text-white/60 text-xs">Outerwear</div>
-                  <div className="text-white flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${getColorClass(recommendation.outerwear.color)}`} />
-                    {recommendation.outerwear.name || recommendation.outerwear.color}
-                  </div>
-                </div>
-              </div>
-            )}
-            {recommendation.accessories.length > 0 && (
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
-                <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center text-white/70">{getCategoryIcon('accessories')}</div>
-                <div className="flex-1">
-                  <div className="text-white/60 text-xs">Accessories</div>
-                  <div className="text-white flex items-center gap-2 flex-wrap">
-                    {recommendation.accessories.map((acc, i) => (
-                      <span key={i} className="flex items-center gap-1">
-                        <div className={`w-3 h-3 rounded-full ${getColorClass(acc.color)}`} />
-                        {acc.name || acc.color}{i < recommendation.accessories.length - 1 && ','}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
+              );
+            })}
           </div>
-          <div className="mt-4 p-3 rounded-lg bg-purple-500/10 border border-purple-500/20">
-            <div className="flex items-start gap-2">
-              <Sparkles size={16} className="text-purple-300 mt-0.5 flex-shrink-0" />
-              <p className="text-purple-200 text-sm">{recommendation.explanation}</p>
+
+          {/* Special tip (umbrella etc.) */}
+          {slots.find((s) => s.special) && (
+            <div className="mt-3 p-3 rounded-xl bg-blue-500/15 border border-blue-400/25 flex items-center gap-2">
+              <Umbrella size={16} className="text-blue-300 flex-shrink-0" />
+              <p className="text-blue-200 text-sm">{slots.find((s) => s.special)?.special}</p>
             </div>
-          </div>
-          {lastWeather && (
-            <p className="text-white/40 text-xs mt-3 text-center">
-              Generated for {lastWeather.temp}°C, {lastWeather.condition} • {selectedMood} mood • {selectedOccasion}
-            </p>
           )}
+
+          {/* Context line */}
+          <p className="text-white/30 text-xs text-center mt-4">{summary}</p>
         </div>
       )}
     </div>

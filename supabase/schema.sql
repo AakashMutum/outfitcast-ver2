@@ -13,16 +13,23 @@ CREATE TABLE IF NOT EXISTS profiles (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Preferences table
 CREATE TABLE IF NOT EXISTS preferences (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   location TEXT,
+  latitude FLOAT,
+  longitude FLOAT,
   gender TEXT,
   style TEXT,
+  temp_sensitivity TEXT,
+  style_pref TEXT,
+  outfit_goal TEXT,
+  color_pref TEXT,
+  occasion_freq TEXT,
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   UNIQUE(user_id)
 );
+
 
 -- Wardrobe items table
 CREATE TABLE IF NOT EXISTS wardrobe_items (
@@ -108,3 +115,29 @@ CREATE TRIGGER on_auth_user_created
 CREATE INDEX IF NOT EXISTS idx_wardrobe_items_user_id ON wardrobe_items(user_id);
 CREATE INDEX IF NOT EXISTS idx_wardrobe_items_category ON wardrobe_items(category);
 CREATE INDEX IF NOT EXISTS idx_preferences_user_id ON preferences(user_id);
+
+-- Chat messages table
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  message TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view own chat messages"
+  ON chat_messages FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own chat messages"
+  ON chat_messages FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete own chat messages"
+  ON chat_messages FOR DELETE
+  USING (auth.uid() = user_id);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user_id ON chat_messages(user_id);
+

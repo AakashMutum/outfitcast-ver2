@@ -7,9 +7,17 @@ import { ProfilePanel } from '@/components/dashboard/ProfilePanel';
 import { WeatherSection } from '@/components/dashboard/WeatherSection';
 import { WardrobeManager } from '@/components/dashboard/WardrobeManager';
 import { OutfitRecommender } from '@/components/dashboard/OutfitRecommender';
+import { ChatBox } from '@/components/dashboard/ChatBox';
 import { DashboardNav } from '@/components/dashboard/DashboardNav';
 import { createBrowserSupabase } from '@/lib/supabase-browser';
 import { WardrobeItem, Preferences } from '@/types';
+
+// Shared location object passed to weather components
+export interface LocationCoords {
+  lat: number;
+  lon: number;
+  cityName: string;
+}
 
 export default function DashboardPage() {
   const { user, profile, isLoading: authLoading } = useAuth();
@@ -19,7 +27,15 @@ export default function DashboardPage() {
   const [outfitCount, setOutfitCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [supabase] = useState(() => createBrowserSupabase());
-  const [detectedLocation, setDetectedLocation] = useState<string>('');
+  const [coords, setCoords] = useState<LocationCoords | null>(null);
+
+  interface WeatherSnapshot {
+    temp: number;
+    condition: string;
+    humidity: number;
+    wind_speed: number;
+  }
+  const [weatherSnapshot, setWeatherSnapshot] = useState<WeatherSnapshot | null>(null);
 
   const fetchOutfitCount = useCallback(async () => {
     if (!user) return;
@@ -29,75 +45,91 @@ export default function DashboardPage() {
         .select('*', { count: 'exact', head: true })
         .eq('user_id', user.id);
       setOutfitCount(count || 0);
-    } catch {
-      // outfits table may not exist yet — that's fine
-      setOutfitCount(0);
-    }
+    } catch { setOutfitCount(0); }
   }, [user, supabase]);
 
-  // Reverse-geocode lat/lon to a city name using OWM Geo API
-  const reverseGeocode = useCallback(async (lat: number, lon: number): Promise<string> => {
+  // Fetch weather snapshot using lat/lon
+  const fetchWeather = useCallback(async (lat: number, lon: number) => {
     const API_KEY = process.env.NEXT_PUBLIC_WEATHER_API_KEY;
-    if (!API_KEY) return '';
+    if (!API_KEY) return;
     try {
       const res = await fetch(
-        `https://api.openweathermap.org/geo/1.0/reverse?lat=${lat}&lon=${lon}&limit=1&appid=${API_KEY}`
+        `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric`
       );
-      if (!res.ok) return '';
+      if (!res.ok) return;
       const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        return data[0].name || '';
-      }
-    } catch {
-      // ignore errors
-    }
-    return '';
+      setWeatherSnapshot({
+        temp: Math.round(data.main.temp),
+        condition: data.weather[0].main,
+        humidity: data.main.humidity,
+        wind_speed: Math.round(data.wind.speed * 3.6),
+      });
+    } catch { /* ignore */ }
   }, []);
 
-  // Auto-detect location via browser geolocation
-  const detectLocation = useCallback(() => {
+  // Auto-detect via browser geolocation → reverse-geocode city name
+  const detectLocation = useCallback(async (): Promise<void> => {
     if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const city = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
-        if (city) setDetectedLocation(city);
-      },
-      () => {
-        // User denied or error – leave detectedLocation empty
-      }
-    );
-  }, [reverseGeocode]);
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const { latitude: lat, longitude: lon } = pos.coords;
+          let cityName = '';
+          const API_KEY = process.env.NEXT_PUBLIC_WEATHER_API_KEY;
+          if (API_KEY) {
+            try {
+              const r = await fetch(
+                `https://api.openweathermap.org/geo/1.0/reverse?lat=${lat}&lon=${lon}&limit=1&appid=${API_KEY}`
+              );
+              const d = await r.json();
+              cityName = d?.[0]?.name || '';
+            } catch { /* ignore */ }
+          }
+          setCoords({ lat, lon, cityName });
+          fetchWeather(lat, lon);
+          resolve();
+        },
+        () => resolve()
+      );
+    });
+  }, [fetchWeather]);
 
   useEffect(() => {
-    if (!user) {
-      setIsLoading(false);
-      return;
-    }
+    if (!user) { setIsLoading(false); return; }
 
     const fetchData = async () => {
       setIsLoading(true);
       try {
         const [wardrobeResult, prefsResult] = await Promise.allSettled([
           supabase.from('wardrobe_items').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
-          supabase.from('preferences').select('*').eq('user_id', user.id).single(),
+          supabase.from('preferences').select('*').eq('user_id', user.id).maybeSingle(),
         ]);
 
         if (wardrobeResult.status === 'fulfilled' && wardrobeResult.value.data) {
           setWardrobeItems(wardrobeResult.value.data);
         }
 
-        let savedLocation = '';
         if (prefsResult.status === 'fulfilled' && prefsResult.value.data) {
-          setPreferences(prefsResult.value.data);
-          savedLocation = prefsResult.value.data.location || '';
-        }
+          const prefs = prefsResult.value.data;
+          setPreferences(prefs);
 
-        // If no location is saved in preferences, request browser geolocation
-        if (!savedLocation) {
+          if (prefs.latitude != null && prefs.longitude != null) {
+            // Use stored lat/lon from preferences
+            const c: LocationCoords = {
+              lat: prefs.latitude,
+              lon: prefs.longitude,
+              cityName: prefs.location || '',
+            };
+            setCoords(c);
+            fetchWeather(prefs.latitude, prefs.longitude);
+          } else {
+            // No saved coords → fall back to browser geolocation
+            detectLocation();
+          }
+        } else {
           detectLocation();
         }
 
-        // Non-blocking
         fetchOutfitCount();
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
@@ -107,15 +139,11 @@ export default function DashboardPage() {
     };
 
     fetchData();
-  }, [user, supabase, fetchOutfitCount, detectLocation]);
+  }, [user, supabase, fetchOutfitCount, detectLocation, fetchWeather]);
 
   const refreshWardrobe = async () => {
     if (!user) return;
-    const { data } = await supabase
-      .from('wardrobe_items')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
+    const { data } = await supabase.from('wardrobe_items').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
     if (data) setWardrobeItems(data);
   };
 
@@ -130,31 +158,31 @@ export default function DashboardPage() {
     );
   }
 
-  if (!user) {
-    router.push('/login');
-    return null;
-  }
-
-  // Saved preference takes priority; fall back to auto-detected city
-  const activeLocation = preferences?.location || detectedLocation;
+  if (!user) { router.push('/login'); return null; }
 
   return (
     <div className="min-h-screen sky-gradient">
       <DashboardNav />
       <main className="p-4 sm:p-6 lg:p-8">
         <div className="dashboard-grid max-w-7xl mx-auto">
+          {/* Column 1 – Profile + Chat */}
           <div className="space-y-6">
             <ProfilePanel profile={profile} outfitCount={outfitCount} wardrobeCount={wardrobeItems.length} />
+            <ChatBox wardrobeItems={wardrobeItems} weather={weatherSnapshot} preferences={preferences} />
           </div>
+
+          {/* Column 2 – Weather + Outfit Recommender */}
           <div className="space-y-6">
-            <WeatherSection location={activeLocation} />
+            <WeatherSection coords={coords} />
             <OutfitRecommender
               wardrobeItems={wardrobeItems}
-              location={activeLocation}
+              coords={coords}
               preferences={preferences}
               onOutfitSaved={fetchOutfitCount}
             />
           </div>
+
+          {/* Column 3 – Wardrobe */}
           <div className="space-y-6">
             <WardrobeManager items={wardrobeItems} onItemsChange={refreshWardrobe} />
           </div>

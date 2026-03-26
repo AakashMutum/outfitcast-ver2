@@ -3,12 +3,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Sun, Cloud, CloudRain, CloudSnow, Wind, Droplets, Thermometer, MapPin } from 'lucide-react';
 import { WeatherData } from '@/types';
+import { LocationCoords } from '@/app/dashboard/page';
 
 interface WeatherSectionProps {
-  location: string;
+  coords: LocationCoords | null;
 }
 
-export function WeatherSection({ location }: WeatherSectionProps) {
+export function WeatherSection({ coords }: WeatherSectionProps) {
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const API_KEY = process.env.NEXT_PUBLIC_WEATHER_API_KEY;
@@ -44,15 +45,19 @@ export function WeatherSection({ location }: WeatherSectionProps) {
   };
 
   useEffect(() => {
-    if (!location) return; // Wait until a location is available
+    if (!coords) return; // wait for coords
     const fetchWeather = async () => {
+      setIsLoading(true);
       if (!API_KEY) {
         setWeather(getMockWeather());
         setIsLoading(false);
         return;
       }
       try {
-        const response = await fetch(`https://api.openweathermap.org/data/2.5/forecast?q=${encodeURIComponent(location)}&appid=${API_KEY}&units=metric`);
+        const { lat, lon } = coords;
+        const response = await fetch(
+          `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric`
+        );
         if (!response.ok) throw new Error('Failed to fetch weather');
         const data = await response.json();
         setWeather(transformWeatherData(data));
@@ -63,44 +68,35 @@ export function WeatherSection({ location }: WeatherSectionProps) {
       }
     };
     fetchWeather();
-  }, [location, API_KEY, transformWeatherData]);
+  }, [coords, API_KEY, transformWeatherData]);
 
   const getMockWeather = (): WeatherData => ({
-    current: {
-      temp: 22,
-      condition: 'Partly Cloudy',
-      icon: 'cloud',
-      humidity: 65,
-      wind_speed: 12,
-      feels_like: 21,
-    },
+    current: { temp: 28, condition: 'Clear', icon: 'sun', humidity: 65, wind_speed: 12, feels_like: 30 },
     forecast: [
-      { date: 'Today', temp_high: 24, temp_low: 18, condition: 'Partly Cloudy', icon: 'cloud' },
-      { date: 'Tue', temp_high: 26, temp_low: 19, condition: 'Sunny', icon: 'sun' },
-      { date: 'Wed', temp_high: 23, temp_low: 17, condition: 'Rainy', icon: 'rain' },
-      { date: 'Thu', temp_high: 25, temp_low: 18, condition: 'Sunny', icon: 'sun' },
-      { date: 'Fri', temp_high: 22, temp_low: 16, condition: 'Cloudy', icon: 'cloud' },
-      { date: 'Sat', temp_high: 24, temp_low: 17, condition: 'Partly Cloudy', icon: 'cloud' },
-      { date: 'Sun', temp_high: 27, temp_low: 20, condition: 'Sunny', icon: 'sun' },
+      { date: 'Today', temp_high: 30, temp_low: 24, condition: 'Clear', icon: 'sun' },
+      { date: 'Tue',   temp_high: 29, temp_low: 23, condition: 'Clouds', icon: 'cloud' },
+      { date: 'Wed',   temp_high: 27, temp_low: 22, condition: 'Rain', icon: 'rain' },
+      { date: 'Thu',   temp_high: 28, temp_low: 23, condition: 'Clear', icon: 'sun' },
+      { date: 'Fri',   temp_high: 31, temp_low: 25, condition: 'Clear', icon: 'sun' },
+      { date: 'Sat',   temp_high: 30, temp_low: 24, condition: 'Clouds', icon: 'cloud' },
+      { date: 'Sun',   temp_high: 29, temp_low: 23, condition: 'Clear', icon: 'sun' },
     ],
   });
 
-
-
   const WeatherIcon = ({ icon, size = 24 }: { icon: string; size?: number }) => {
     switch (icon) {
-      case 'sun': return <Sun size={size} className="text-yellow-300" />;
+      case 'sun':  return <Sun size={size} className="text-yellow-300" />;
       case 'rain': return <CloudRain size={size} className="text-blue-300" />;
       case 'snow': return <CloudSnow size={size} className="text-white" />;
-      default: return <Cloud size={size} className="text-white" />;
+      default:     return <Cloud size={size} className="text-white" />;
     }
   };
 
-  if (!location) {
+  if (!coords) {
     return (
       <div className="glass-card p-6">
-        <div className="flex items-center justify-center h-48">
-          <div className="text-center">
+        <div className="flex items-center justify-center h-48 text-center">
+          <div>
             <div className="spinner mx-auto mb-3" />
             <p className="text-white/60 text-sm">Detecting your location…</p>
           </div>
@@ -133,7 +129,8 @@ export function WeatherSection({ location }: WeatherSectionProps) {
         <h2 className="font-serif text-xl text-white">Weather Forecast</h2>
         <div className="flex items-center gap-2 text-white/70">
           <MapPin size={16} />
-          <span className="text-sm">{location}</span>
+          {/* City name is for display only — weather was fetched by lat/lon */}
+          <span className="text-sm">{coords.cityName || 'Your location'}</span>
         </div>
       </div>
 

@@ -17,11 +17,19 @@ export interface Profile {
 export interface Preferences {
   id: string;
   user_id: string;
-  location: string | null;
+  location: string | null;       // city name – display only
+  latitude: number | null;
+  longitude: number | null;
   gender: string | null;
   style: string | null;
+  temp_sensitivity: string | null;
+  style_pref: string | null;
+  outfit_goal: string | null;
+  color_pref: string | null;
+  occasion_freq: string | null;
   updated_at: string;
 }
+
 
 export interface WardrobeItem {
   id: string;
