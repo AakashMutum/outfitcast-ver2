@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { WardrobeItem, Mood, Occasion, Preferences } from '@/types';
 import { LocationCoords } from '@/app/dashboard/page';
 import {
-  Sparkles, Shirt, Footprints, Wind, CircleDot, Sparkle,
+  Sparkles, Shirt, Footprints, Wind, CircleDot,
   RefreshCw, CheckCircle2, XCircle, Umbrella, Thermometer,
 } from 'lucide-react';
 
@@ -71,6 +71,14 @@ interface SuggestedSlot {
 
 // ─── Core rule engine ─────────────────────────────────────────────────────────
 
+function getTemperatureCategory(temp: number) {
+  if (temp < 10) return "very_cold";
+  if (temp < 18) return "chilly";
+  if (temp < 26) return "comfortable";
+  if (temp < 32) return "warm";
+  return "hot";
+}
+
 function generateSuggestion(
   weather: { temp: number; condition: string },
   wardrobeItems: WardrobeItem[],
@@ -80,9 +88,13 @@ function generateSuggestion(
   const byCategory = (cat: WardrobeItem['category']) =>
     wardrobeItems.filter((i) => i.category === cat);
 
-  const isCold = weather.temp < 15;
-  const isMild = weather.temp >= 15 && weather.temp < 24;
-  const isHot = weather.temp >= 24;
+  const tempCategory = getTemperatureCategory(weather.temp);
+  const isCold = tempCategory === "very_cold";
+  const isChilly = tempCategory === "chilly";
+  const isComfortable = tempCategory === "comfortable";
+  const isWarm = tempCategory === "warm";
+  const isHot = tempCategory === "hot";
+
   const isRaining = /rain|drizzle|thunderstorm/i.test(weather.condition);
   const isSnowing = /snow|sleet/i.test(weather.condition);
   const isWorkout = occasion === 'workout' || mood === 'sporty';
@@ -96,14 +108,14 @@ function generateSuggestion(
       const nameLower = (item.name || '').toLowerCase();
 
       // Season match
-      if (isCold && (item.season === 'winter' || item.season === 'fall')) score += 3;
-      if (isHot && (item.season === 'summer' || item.season === 'spring')) score += 3;
+      if ((isCold || isChilly) && (item.season === 'winter' || item.season === 'fall')) score += 3;
+      if ((isWarm || isHot) && (item.season === 'summer' || item.season === 'spring')) score += 3;
       if (item.season === 'all') score += 1;
 
       // Occasion/mood hints from name
       if (isWorkout && /sport|gym|athletic|jogger|track|running/i.test(nameLower)) score += 4;
       if (isFormal && /shirt|blazer|trouser|formal|dress|suit|oxford|heel/i.test(nameLower)) score += 4;
-      if (isCold && /thermal|sweater|hoodie|fleece|knit|wool/i.test(nameLower)) score += 3;
+      if ((isCold || isChilly) && /thermal|sweater|hoodie|fleece|knit|wool/i.test(nameLower)) score += 3;
       if (isRaining && /boot|waterproof/i.test(nameLower)) score += 2;
 
       return { item, score };
@@ -112,20 +124,24 @@ function generateSuggestion(
     return scored[0].item;
   };
 
-  // Outerwear logic – only suggest if cold/rainy/snowy
+  // Outerwear logic – only suggest if cold/chilly/rainy/snowy
   const outerItems = byCategory('outerwear');
   let outerFound: WardrobeItem | null = null;
   let outerReason = '';
-  if (isCold || isRaining || isSnowing) {
-    if (isCold || isSnowing) {
-      // Prefer jacket/coat
-      outerFound = outerItems.find((i) =>
-        /jacket|coat|puffer|parka|overcoat/i.test(i.name || '')
-      ) || rank(outerItems);
-      outerReason = isSnowing ? 'It\'s snowing – a warm coat is essential' : 'Cold weather – layer up with a jacket';
+
+  if (isCold || isChilly || isRaining || isSnowing) {
+    if (isSnowing) {
+      outerFound = outerItems.find((i) => /jacket|coat|puffer|parka|overcoat/i.test(i.name || '')) || rank(outerItems);
+      outerReason = "It's snowing – a warm coat is essential";
     } else if (isRaining) {
       outerFound = outerItems.find((i) => /rain|trench|waterproof/i.test(i.name || '')) || rank(outerItems);
-      outerReason = 'It\'s raining – grab a waterproof layer';
+      outerReason = "It's raining – grab a waterproof layer";
+    } else if (isCold) {
+      outerFound = outerItems.find((i) => /jacket|coat|puffer|parka|overcoat/i.test(i.name || '')) || rank(outerItems);
+      outerReason = "It's really cold, layering is important";
+    } else if (isChilly) {
+      outerFound = outerItems.find((i) => /jacket|cardigan|sweatshirt|hoodie|light/i.test(i.name || '')) || rank(outerItems);
+      outerReason = "A light layer will keep you comfortable";
     }
   }
 
@@ -143,16 +159,21 @@ function generateSuggestion(
   }
 
   // Build weather summary line
-  const tempLabel = isCold ? 'Cold' : isMild ? 'Mild' : 'Hot';
+  let tempLabel = 'Nice and comfortable weather';
+  if (isCold) tempLabel = "It's freezing out";
+  else if (isChilly) tempLabel = "A bit cool today";
+  else if (isWarm) tempLabel = "It's getting warm";
+  else if (isHot) tempLabel = "It's quite hot today";
+
   const rainNote = isRaining ? ', rainy' : isSnowing ? ', snowy' : '';
-  const summary = `${tempLabel} ${weather.temp}°C${rainNote} · ${mood} mood · ${occasion}`;
+  const summary = `${tempLabel} (${weather.temp}°C${rainNote}) · ${mood} mood · ${occasion}`;
 
   const slots: SuggestedSlot[] = [
     {
       label: 'Top',
       icon: <Shirt size={20} />,
       found: rank(byCategory('top')),
-      reason: isCold ? 'Warm top for cold weather' : isHot ? 'Light top for the heat' : 'Everyday top',
+      reason: isCold ? 'Thick top for the cold' : isChilly ? 'Warm top for cool weather' : (isWarm || isHot) ? 'Light top for the heat' : 'Everyday top',
     },
     {
       label: 'Bottom',
@@ -170,11 +191,11 @@ function generateSuggestion(
       label: 'Outerwear',
       icon: <Wind size={20} />,
       found: outerFound,
-      reason: outerReason || (isCold ? 'Layer up for the cold' : ''),
+      reason: outerReason,
     },
     {
       label: 'Accessories',
-      icon: <Sparkle size={20} />,
+      icon: <Sparkles size={20} />,
       found: rank(byCategory('accessories')),
       reason: 'Complete your look',
       special: isRaining ? '🌂 Carry an umbrella' : isSnowing ? '🧣 Scarf & gloves recommended' : undefined,
@@ -248,9 +269,8 @@ export function OutfitRecommender({ wardrobeItems, coords, preferences, onOutfit
             <button
               key={m.value}
               onClick={() => setSelectedMood(m.value)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition-colors ${
-                selectedMood === m.value ? 'bg-white/30 text-white' : 'bg-white/5 text-white/70 hover:bg-white/10'
-              }`}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition-colors ${selectedMood === m.value ? 'bg-white/30 text-white' : 'bg-white/5 text-white/70 hover:bg-white/10'
+                }`}
             >
               <span>{m.emoji}</span>
               <span className="text-sm">{m.label}</span>
@@ -313,16 +333,14 @@ export function OutfitRecommender({ wardrobeItems, coords, preferences, onOutfit
               return (
                 <div
                   key={slot.label}
-                  className={`flex items-center gap-3 p-3 rounded-xl border transition-colors ${
-                    available
-                      ? 'bg-green-500/10 border-green-500/25'
-                      : 'bg-white/5 border-white/10'
-                  }`}
+                  className={`flex items-center gap-3 p-3 rounded-xl border transition-colors ${available
+                    ? 'bg-green-500/10 border-green-500/25'
+                    : 'bg-white/5 border-white/10'
+                    }`}
                 >
                   {/* Category icon */}
-                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                    available ? 'bg-green-500/20 text-green-300' : 'bg-white/10 text-white/40'
-                  }`}>
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${available ? 'bg-green-500/20 text-green-300' : 'bg-white/10 text-white/40'
+                    }`}>
                     {slot.icon}
                   </div>
 

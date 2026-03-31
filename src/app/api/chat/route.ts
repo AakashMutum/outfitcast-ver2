@@ -8,6 +8,14 @@ interface ChatBody {
 import { generateFallbackOutfit } from "@/lib/fallbackOutfit";
 import { WardrobeItem } from "@/types";
 
+function getTemperatureCategory(temp: number) {
+  if (temp < 10) return "very_cold";
+  if (temp < 18) return "chilly";
+  if (temp < 26) return "comfortable";
+  if (temp < 32) return "warm";
+  return "hot";
+}
+
 export async function POST(req: Request) {
   let body: ChatBody = {};
 
@@ -23,7 +31,8 @@ export async function POST(req: Request) {
       throw new Error("GEMINI_API_KEY not found in environment.");
     }
 
-    const { message = "", wardrobe = [], weather = {}, preferences = {} } = body;
+    const { message = "", wardrobe = [], weather = {} as any, preferences = {} } = body;
+    const tempCategory = getTemperatureCategory(weather?.temp ?? 22);
 
     // Build a rich, context-aware prompt for a friendly stylist persona
     const prompt = `
@@ -32,7 +41,8 @@ You are a personal fashion stylist — friendly, casual, and fashion-savvy. You 
 Here is what you know about the user:
 
 === Weather ===
-${JSON.stringify(weather)}
+Data: ${JSON.stringify(weather)}
+The temperature is considered: [${tempCategory}] (NEVER call 30°C or above 'chilly' or 'cold'). 
 
 === Wardrobe (what they actually own) ===
 ${JSON.stringify(wardrobe)}
@@ -75,7 +85,7 @@ ${JSON.stringify(wardrobe)}
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
-          temperature: 0.8,
+          temperature: 0.7,
           maxOutputTokens: 512,
         },
       }),
@@ -88,12 +98,14 @@ ${JSON.stringify(wardrobe)}
     }
 
     const data = await response.json();
-    console.log("Gemini response received ✓");
+    console.log("FULL RESPONSE:", JSON.stringify(data));
 
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const text = data?.candidates?.[0]?.content?.parts
+      ?.map((p: any) => p.text)
+      .join(" ") || "No response";
 
-    if (!text) {
-      throw new Error("AI returned empty response");
+    if (!text || text.length < 20 || text === "No response") {
+      throw new Error("AI returned a short or empty response");
     }
 
     return Response.json({ reply: text });

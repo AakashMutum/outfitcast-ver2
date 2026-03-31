@@ -25,18 +25,30 @@ interface FallbackResult {
   explanation: string;
 }
 
+function getTemperatureCategory(temp: number) {
+  if (temp < 10) return "very_cold";
+  if (temp < 18) return "chilly";
+  if (temp < 26) return "comfortable";
+  if (temp < 32) return "warm";
+  return "hot";
+}
+
 export function generateFallbackOutfit({
   wardrobe,
   weather,
   mood,
   occasion,
-  preferences,
 }: FallbackParams): FallbackResult {
   const temp = weather.feels_like ?? weather.temp ?? 22; // Default to moderate if not provided
   const condition = (weather.condition || 'Clear').toLowerCase();
   
-  const isCold = temp < 18;
-  const isHot = temp > 28;
+  const tempCategory = getTemperatureCategory(temp);
+  const isCold = tempCategory === "very_cold";
+  const isChilly = tempCategory === "chilly";
+  const isComfortable = tempCategory === "comfortable";
+  const isWarm = tempCategory === "warm";
+  const isHot = tempCategory === "hot";
+
   const isRaining = condition.includes('rain') || condition.includes('drizzle') || condition.includes('thunderstorm');
   const isSnowing = condition.includes('snow');
 
@@ -54,8 +66,8 @@ export function generateFallbackOutfit({
     let score = 0;
     const name = (item.name || '').toLowerCase();
     
-    if (isCold && (item.season === 'winter' || item.season === 'fall' || name.includes('sweater') || name.includes('long sleeve'))) score += 3;
-    if (isHot && (item.season === 'summer' || name.includes('t-shirt') || name.includes('tank'))) score += 3;
+    if ((isCold || isChilly) && (item.season === 'winter' || item.season === 'fall' || name.includes('sweater') || name.includes('long sleeve'))) score += 3;
+    if ((isWarm || isHot) && (item.season === 'summer' || name.includes('t-shirt') || name.includes('tank'))) score += 3;
     
     if (occasion === 'work' && (name.includes('shirt') || name.includes('blouse'))) score += 2;
     if (mood === 'sporty' && name.includes('athletic')) score += 2;
@@ -67,8 +79,8 @@ export function generateFallbackOutfit({
     let score = 0;
     const name = (item.name || '').toLowerCase();
     
-    if (isCold && (name.includes('jeans') || name.includes('pants') || name.includes('trousers'))) score += 3;
-    if (isHot && (name.includes('shorts') || name.includes('skirt'))) score += 3;
+    if ((isCold || isChilly) && (name.includes('jeans') || name.includes('pants') || name.includes('trousers'))) score += 3;
+    if ((isWarm || isHot) && (name.includes('shorts') || name.includes('skirt'))) score += 3;
     
     if (occasion === 'work' && name.includes('trousers')) score += 2;
     if (mood === 'cozy' && name.includes('sweatpants')) score += 2;
@@ -81,37 +93,40 @@ export function generateFallbackOutfit({
     const name = (item.name || '').toLowerCase();
     
     if (isRaining && (name.includes('boot') || name.includes('waterproof'))) score += 4;
-    if (isHot && name.includes('sandal')) score += 2;
+    if ((isWarm || isHot) && name.includes('sandal')) score += 2;
     if (occasion === 'work') score += 1;
     
     return score;
   });
 
-  const outerwear = isCold || isRaining || isSnowing ? rank(byCategory('outerwear'), (item) => {
+  const outerwear = isCold || isChilly || isRaining || isSnowing ? rank(byCategory('outerwear'), (item) => {
     let score = 0;
     const name = (item.name || '').toLowerCase();
     
     if (isSnowing && (name.includes('coat') || name.includes('puffer'))) score += 3;
     if (isRaining && (name.includes('rain') || name.includes('waterproof') || name.includes('jacket'))) score += 3;
-    if (isCold && name.includes('jacket')) score += 2;
+    if (isCold && (name.includes('coat') || name.includes('jacket') || name.includes('puffer'))) score += 3;
+    if (isChilly && (name.includes('light') || name.includes('cardigan') || name.includes('jacket'))) score += 2;
     
     return score;
   }) : null;
 
   const accessories = byCategory('accessories').filter((item) => {
     const name = (item.name || '').toLowerCase();
-    if (isCold && name.includes('scarf')) return true;
-    if (isHot && (name.includes('sunglasses') || name.includes('hat'))) return true;
+    if ((isCold || isChilly) && name.includes('scarf')) return true;
+    if ((isWarm || isHot) && (name.includes('sunglasses') || name.includes('hat'))) return true;
     if (isRaining && name.includes('umbrella')) return true;
     return false;
   }).slice(0, 2);
 
   let explanation = '';
-  if (isCold) explanation += 'It is cold outside, so I prioritized warm clothing and layers. ';
-  else if (isHot) explanation += 'It is hot today, so I went with light, breathable clothes. ';
-  else explanation += 'The weather is moderate, so I chose a comfortable balanced outfit. ';
+  if (isCold) explanation += "It's really cold, layering is important. ";
+  else if (isChilly) explanation += "A light layer will keep you comfortable. ";
+  else if (isComfortable) explanation += "Nice and comfortable weather, wear what makes you feel good. ";
+  else if (isWarm) explanation += "Keep things light and breathable. ";
+  else if (isHot) explanation += "Stay cool with airy fabrics. ";
 
-  if (isRaining) explanation += 'Since it might rain, I suggested suitable footwear or outerwear. ';
+  if (isRaining) explanation += "Since it might rain, I suggested suitable footwear or outerwear. ";
 
   return {
     outfit: { top, bottom, shoes, outerwear, accessories },
